@@ -1,0 +1,64 @@
+{
+    "name": "演示试卷",
+    "mode": 1,
+    "time_limit": 30,
+    "description": "这是一个演示试卷，包含判断题、单选题和多选题",
+    "questions": {
+        "q1": {
+            "type": "tf",
+            "title": "PHP是一种服务器端脚本语言。",
+            "options": ["正确", "错误"],
+            "answer": "A",
+            "score": 10
+        },
+        "q2": {
+            "type": "tf",
+            "title": "MySQL是一种NoSQL数据库。",
+            "options": ["正确", "错误"],
+            "answer": "B",
+            "score": 10
+        },
+        "q3": {
+            "type": "single",
+            "title": "以下哪个不是PHP的数据类型？",
+            "options": ["整型", "浮点型", "字符型", "集合型"],
+            "answer": "D",
+            "score": 10
+        },
+        "q4": {
+            "type": "single",
+            "title": "HTTP协议默认使用的端口号是多少？",
+            "options": ["21", "80", "443", "8080"],
+            "answer": "B",
+            "score": 10
+        },
+        "q5": {
+            "type": "single",
+            "title": "以下哪个不是JavaScript的基本数据类型？",
+            "options": ["Number", "String", "Boolean", "Character"],
+            "answer": "D",
+            "score": 10
+        },
+        "q6": {
+            "type": "multi",
+            "title": "以下哪些是前端开发常用的框架？",
+            "options": ["React", "Vue", "Angular", "Django", "Laravel"],
+            "answer": ["A", "B", "C"],
+            "score": 15
+        },
+        "q7": {
+            "type": "multi",
+            "title": "以下哪些是关系型数据库？",
+            "options": ["MySQL", "MongoDB", "PostgreSQL", "Redis", "SQLite"],
+            "answer": ["A", "C", "E"],
+            "score": 15
+        },
+        "q8": {
+            "type": "multi",
+            "title": "HTTP请求方法包括哪些？",
+            "options": ["GET", "POST", "PUT", "DELETE"],
+            "answer": ["A", "B", "C", "D"],
+            "score": 20
+        }
+    }
+}
