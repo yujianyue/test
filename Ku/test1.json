@@ -1,0 +1,78 @@
+{
+    "name": "计算机基础知识测试",
+    "mode": 1,
+    "time_limit": 60,
+    "description": "计算机基础知识测试卷",
+    "questions": {
+        "q1": {
+            "type": "tf",
+            "title": "计算机的运算速度通常用MIPS来表示。",
+            "options": ["正确", "错误"],
+            "answer": "A",
+            "score": 5
+        },
+        "q2": {
+            "type": "tf",
+            "title": "RAM是只读存储器。",
+            "options": ["正确", "错误"],
+            "answer": "B",
+            "score": 5
+        },
+        "q3": {
+            "type": "tf",
+            "title": "ASCII码是一种字符编码标准。",
+            "options": ["正确", "错误"],
+            "answer": "A",
+            "score": 5
+        },
+        "q4": {
+            "type": "single",
+            "title": "计算机的基本组成部分不包括？",
+            "options": ["运算器", "控制器", "存储器", "打印机"],
+            "answer": "D",
+            "score": 10
+        },
+        "q5": {
+            "type": "single",
+            "title": "1KB等于多少字节？",
+            "options": ["1000", "1024", "512", "2048"],
+            "answer": "B",
+            "score": 10
+        },
+        "q6": {
+            "type": "single",
+            "title": "以下哪个不是操作系统？",
+            "options": ["Windows", "Linux", "Chrome", "macOS"],
+            "answer": "C",
+            "score": 10
+        },
+        "q7": {
+            "type": "single",
+            "title": "Internet使用的通信协议是？",
+            "options": ["IPX/SPX", "TCP/IP", "NetBEUI", "FTP"],
+            "answer": "B",
+            "score": 10
+        },
+        "q8": {
+            "type": "multi",
+            "title": "以下哪些是计算机输入设备？",
+            "options": ["键盘", "鼠标", "显示器", "扫描仪", "打印机"],
+            "answer": ["A", "B", "D"],
+            "score": 15
+        },
+        "q9": {
+            "type": "multi",
+            "title": "以下哪些是常见的图片格式？",
+            "options": ["JPG", "PNG", "GIF", "MP3", "BMP"],
+            "answer": ["A", "B", "C", "E"],
+            "score": 15
+        },
+        "q10": {
+            "type": "multi",
+            "title": "以下哪些属于编程语言？",
+            "options": ["Java", "Python", "HTML", "C++", "CSS"],
+            "answer": ["A", "B", "D"],
+            "score": 15
+        }
+    }
+}
