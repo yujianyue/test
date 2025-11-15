@@ -16,8 +16,653 @@ function parsePuzzle($text) {
     }
     return $values;
 }
-$initialPuzzle = parsePuzzle($puzzleInput);
-$puzzleJson = json_encode($initialPuzzle);
+$tech = [
+    'NakedSingle' => '显性单数 (Naked Single)',
+    'HiddenSingle' => '隐性单数 (Hidden Single)',
+    'Claiming' => '占位排除 (Claiming)',
+    'Pointing' => '定向排除 (Pointing)',
+    'NakedSubset' => '显性子集 (Naked Subset)',
+    'HiddenSubset' => '隐性子集 (Hidden Subset)',
+    'X_Wing' => 'X 翼 (X-Wing)',
+    'XY_Wing' => 'XY 翼 (XY-Wing)',
+    'W_Wing' => 'W 翼 (W-Wing)',
+    'XYZ_Wing' => 'XYZ 翼 (XYZ-Wing)',
+    'X_Chains' => 'X 链 (X-Chains)',
+    'XY_Chains' => 'XY 链 (XY-Chains)',
+    'Swordfish' => '剑鱼 (Swordfish)',
+    'Skyscraper' => '摩天楼 (Skyscraper)',
+    'UniqueRectangle' => '唯一矩形 (Unique Rectangle)'
+];
+class SudokuSolver {
+    private $puzzle;
+    private $originalPuzzle;
+    private $candidates;
+    private $tCOL;
+    private $tROW;
+    private $tBOX;
+    private $steps;
+    private $hs_ns = "2";
+    public function __construct($puzzleString) {
+        $this->puzzle = $this->parsePuzzle($puzzleString);
+        $this->originalPuzzle = $this->puzzle;
+        $this->candidates = array_fill(0, 81, 0);
+        $this->steps = [];
+        $this->tCOL = [];
+        $this->tROW = [];
+        $this->tBOX = [];
+        for ($i = 0; $i < 81; $i++) {
+            $this->tCOL[$i] = $i % 9;
+            $this->tROW[$i] = intval($i / 9);
+            $this->tBOX[$i] = 3 * intval($this->tROW[$i] / 3) + intval($this->tCOL[$i] / 3);
+        }
+        $this->initCandidates();
+    }
+    private function parsePuzzle($text) {
+        $cleaned = preg_replace('/[^0-9.]/', '', $text);
+        $values = array_fill(0, 81, 0);
+        for ($i = 0; $i < 81 && $i < strlen($cleaned); $i++) {
+            $ch = $cleaned[$i];
+            $values[$i] = ($ch === '.' || $ch === '0') ? 0 : intval($ch);
+        }
+        return $values;
+    }
+    private function COL($i) { return $this->tCOL[$i]; }
+    private function ROW($i) { return $this->tROW[$i]; }
+    private function BOX($i) { return $this->tBOX[$i]; }
+    private function getCoordStr($i) {
+        return "(" . ($this->COL($i) + 1) . "," . ($this->ROW($i) + 1) . ")";
+    }
+    private function n2b($n) { return 1 << ($n - 1); }
+    private function bc($n) {
+        $c = 0;
+        for ($i = 0; $i < 9; $i++) {
+            if ($n & (1 << $i)) $c++;
+        }
+        return $c;
+    }
+    private function b2n($mask) {
+        for ($i = 0; $i < 9; $i++) {
+            if ($mask & (1 << $i)) return $i + 1;
+        }
+        return 0;
+    }
+    private function getIdxFromColRow($col, $row) {
+        return 9 * $row + $col;
+    }
+    private function getIdxFromBoxIdx($box, $i) {
+        $bcol = $box % 3;
+        $brow = intval($box / 3);
+        $ccol = $i % 3;
+        $crow = intval($i / 3);
+        return 9 * (3 * $brow + $crow) + 3 * $bcol + $ccol;
+    }
+    private function isSolved($i) {
+        return $this->puzzle[$i] !== 0;
+    }
+    private function isSingle($candidateMask) {
+        $c = 0;
+        $n = 0;
+        for ($i = 0; $i < 9; $i++) {
+            if ($candidateMask & (1 << $i)) {
+                $c++;
+                $n = $i + 1;
+            }
+        }
+        return $c === 1 ? $n : 0;
+    }
+    private function getCandidateListOfBox($box, &$list, &$idx) {
+        for ($cell = 0; $cell < 9; $cell++) {
+            $i = $this->getIdxFromBoxIdx($box, $cell);
+            $list[$cell] = $this->isSolved($i) ? 0 : $this->candidates[$i];
+            $idx[$cell] = $i;
+        }
+    }
+    private function getCandidateListOfCol($col, &$list, &$idx) {
+        for ($row = 0; $row < 9; $row++) {
+            $i = $this->getIdxFromColRow($col, $row);
+            $list[$row] = $this->isSolved($i) ? 0 : $this->candidates[$i];
+            $idx[$row] = $i;
+        }
+    }
+    private function getCandidateListOfRow($row, &$list, &$idx) {
+        for ($col = 0; $col < 9; $col++) {
+            $i = $this->getIdxFromColRow($col, $row);
+            $list[$col] = $this->isSolved($i) ? 0 : $this->candidates[$i];
+            $idx[$col] = $i;
+        }
+    }
+    private function getCandidateCountOfList($candidateList, $n, &$cells) {
+        $count = 0;
+        $mask = $this->n2b($n);
+        $cells = [];
+        for ($i = 0; $i < 9; $i++) {
+            if ($candidateList[$i] & $mask) {
+                $cells[$count] = $i;
+                $count++;
+            }
+        }
+        return $count;
+    }
+    private function initCandidates() {
+        for ($row = 0; $row < 9; $row++) {
+            for ($col = 0; $col < 9; $col++) {
+                $i = $this->getIdxFromColRow($col, $row);
+                if (!$this->isSolved($i)) {
+                    $this->candidates[$i] = 0x1ff;
+                } else {
+                    $this->candidates[$i] = $this->n2b($this->puzzle[$i]);
+                }
+            }
+        }
+        $this->updateCandidates();
+    }
+    private function updateCandidates() {
+        for ($box = 0; $box < 9; $box++) {
+            for ($cell = 0; $cell < 9; $cell++) {
+                $index = $this->getIdxFromBoxIdx($box, $cell);
+                if (!$this->isSolved($index)) continue;
+                $n = $this->puzzle[$index];
+                for ($i = 0; $i < 9; $i++) {
+                    if ($i !== $cell) {
+                        $this->candidates[$this->getIdxFromBoxIdx($box, $i)] &= ~$this->n2b($n);
+                    }
+                }
+            }
+        }
+        for ($col = 0; $col < 9; $col++) {
+            for ($row = 0; $row < 9; $row++) {
+                $index = $this->getIdxFromColRow($col, $row);
+                if (!$this->isSolved($index)) continue;
+                $n = $this->puzzle[$index];
+                for ($i = 0; $i < 9; $i++) {
+                    if ($i !== $row) {
+                        $this->candidates[$this->getIdxFromColRow($col, $i)] &= ~$this->n2b($n);
+                    }
+                }
+            }
+        }
+        for ($row = 0; $row < 9; $row++) {
+            for ($col = 0; $col < 9; $col++) {
+                $index = $this->getIdxFromColRow($col, $row);
+                if (!$this->isSolved($index)) continue;
+                $n = $this->puzzle[$index];
+                for ($i = 0; $i < 9; $i++) {
+                    if ($i !== $col) {
+                        $this->candidates[$this->getIdxFromColRow($i, $row)] &= ~$this->n2b($n);
+                    }
+                }
+            }
+        }
+    }
+    private function findSingle(&$c, &$idx, $unitType, $unitIndex) {
+        for ($n = 1; $n <= 9; $n++) {
+            $cell = [];
+            if ($this->getCandidateCountOfList($c, $n, $cell) !== 1) continue;
+            $i = $idx[$cell[0]];
+            $this->puzzle[$i] = $n;
+            $this->candidates[$i] = $this->n2b($n);
+            $unitName = $unitType === "box" ? "第" . ($unitIndex + 1) . "宫" : 
+                       ($unitType === "row" ? "第" . ($unitIndex + 1) . "行" : "第" . ($unitIndex + 1) . "列");
+            return [
+                'success' => true,
+                'cell' => $i,
+                'value' => $n,
+                'description' => $unitName . "中，数字" . $n . "只能出现在" . $this->getCoordStr($i) . "，因此" . $this->getCoordStr($i) . "=" . $n . "。"
+            ];
+        }
+        return ['success' => false];
+    }
+    private function p_findSingle() {
+        if ($this->hs_ns === "2") {
+            for ($i = 0; $i < 81; $i++) {
+                if ($this->isSolved($i)) continue;
+                $n = $this->isSingle($this->candidates[$i]);
+                if ($n === 0) continue;
+                $this->puzzle[$i] = $n;
+                $this->candidates[$i] = $this->n2b($n);
+                return [
+                    'technique' => 'NakedSingle',
+                    'cell' => $i,
+                    'value' => $n,
+                    'description' => "坐标" . $this->getCoordStr($i) . "的候选数只有" . $n . "，因此" . $this->getCoordStr($i) . "=" . $n . "。"
+                ];
+            }
+        }
+        $c = [];
+        $idx = [];
+        for ($i = 0; $i < 9; $i++) {
+            $this->getCandidateListOfBox($i, $c, $idx);
+            $result = $this->findSingle($c, $idx, "box", $i);
+            if ($result['success']) {
+                $this->updateCandidates();
+                return [
+                    'technique' => 'HiddenSingle',
+                    'cell' => $result['cell'],
+                    'value' => $result['value'],
+                    'description' => $result['description']
+                ];
+            }
+            $this->getCandidateListOfCol($i, $c, $idx);
+            $result = $this->findSingle($c, $idx, "col", $i);
+            if ($result['success']) {
+                $this->updateCandidates();
+                return [
+                    'technique' => 'HiddenSingle',
+                    'cell' => $result['cell'],
+                    'value' => $result['value'],
+                    'description' => $result['description']
+                ];
+            }
+            $this->getCandidateListOfRow($i, $c, $idx);
+            $result = $this->findSingle($c, $idx, "row", $i);
+            if ($result['success']) {
+                $this->updateCandidates();
+                return [
+                    'technique' => 'HiddenSingle',
+                    'cell' => $result['cell'],
+                    'value' => $result['value'],
+                    'description' => $result['description']
+                ];
+            }
+        }
+        if ($this->hs_ns === "1") {
+            for ($i = 0; $i < 81; $i++) {
+                if ($this->isSolved($i)) continue;
+                $n = $this->isSingle($this->candidates[$i]);
+                if ($n === 0) continue;
+                $this->puzzle[$i] = $n;
+                $this->candidates[$i] = $this->n2b($n);
+                return [
+                    'technique' => 'NakedSingle',
+                    'cell' => $i,
+                    'value' => $n,
+                    'description' => "坐标" . $this->getCoordStr($i) . "的候选数只有" . $n . "，因此" . $this->getCoordStr($i) . "=" . $n . "。"
+                ];
+            }
+        }
+        return null;
+    }
+    private function findClaiming(&$c, &$idx, $unitType, $unitIndex) {
+        for ($n = 1; $n <= 9; $n++) {
+            $cell = [];
+            $count = $this->getCandidateCountOfList($c, $n, $cell);
+            if ($count !== 2 && $count !== 3) continue;
+            if ($count === 2) $cell[2] = $cell[0];
+            if ($this->BOX($idx[$cell[0]]) !== $this->BOX($idx[$cell[1]]) || 
+                $this->BOX($idx[$cell[0]]) !== $this->BOX($idx[$cell[2]])) continue;
+            $c2 = [];
+            $idx2 = [];
+            $box = $this->BOX($idx[$cell[0]]);
+            $this->getCandidateListOfBox($box, $c2, $idx2);
+            $mask = $this->n2b($n);
+            $excludedCells = [];
+            for ($i = 0; $i < 9; $i++) {
+                $index = $idx2[$i];
+                if ($this->isSolved($index)) continue;
+                $again = false;
+                for ($j = 0; $j < $count; $j++) {
+                    if ($index === $idx[$cell[$j]]) {
+                        $again = true;
+                        break;
+                    }
+                }
+                if ($again) continue;
+                if (($this->candidates[$index] & $mask) === 0) continue;
+                $this->candidates[$index] &= ~$mask;
+                $excludedCells[] = $index;
+            }
+            if (empty($excludedCells)) continue;
+            $unitName = $unitType === "row" ? "第" . ($unitIndex + 1) . "行" : "第" . ($unitIndex + 1) . "列";
+            $boxName = "第" . ($box + 1) . "宫";
+            $cellsStr = implode("和", array_map(function($j) use ($idx, $cell, $this) {
+                return $this->getCoordStr($idx[$cell[$j]]);
+            }, range(0, $count - 1)));
+            $excludedStr = implode("、", array_map([$this, 'getCoordStr'], $excludedCells));
+            return [
+                'success' => true,
+                'cells' => array_map(function($j) use ($idx, $cell) { return $idx[$cell[$j]]; }, range(0, $count - 1)),
+                'excluded' => $excludedCells,
+                'value' => $n,
+                'description' => $unitName . "中，数字" . $n . "的候选位置" . $cellsStr . "都在" . $boxName . "内，因此" . $boxName . "其他位置" . $excludedStr . "排除候选值" . $n . "。"
+            ];
+        }
+        return ['success' => false];
+    }
+    private function p_findClaiming() {
+        $c = [];
+        $idx = [];
+        for ($i = 0; $i < 9; $i++) {
+            $this->getCandidateListOfCol($i, $c, $idx);
+            $result = $this->findClaiming($c, $idx, "col", $i);
+            if ($result['success']) {
+                $this->updateCandidates();
+                return [
+                    'technique' => 'Claiming',
+                    'cells' => $result['cells'],
+                    'excluded' => $result['excluded'],
+                    'value' => $result['value'],
+                    'description' => $result['description']
+                ];
+            }
+            $this->getCandidateListOfRow($i, $c, $idx);
+            $result = $this->findClaiming($c, $idx, "row", $i);
+            if ($result['success']) {
+                $this->updateCandidates();
+                return [
+                    'technique' => 'Claiming',
+                    'cells' => $result['cells'],
+                    'excluded' => $result['excluded'],
+                    'value' => $result['value'],
+                    'description' => $result['description']
+                ];
+            }
+        }
+        return null;
+    }
+    private function p_findPointing() {
+        $c = [];
+        $idx = [];
+        $cell = [];
+        for ($box = 0; $box < 9; $box++) {
+            $this->getCandidateListOfBox($box, $c, $idx);
+            for ($n = 1; $n <= 9; $n++) {
+                $count = $this->getCandidateCountOfList($c, $n, $cell);
+                if ($count !== 2 && $count !== 3) continue;
+                $col = [];
+                $row = [];
+                for ($i = 0; $i < $count; $i++) {
+                    $index = $idx[$cell[$i]];
+                    $col[$i] = $this->COL($index) % 3;
+                    $row[$i] = $this->ROW($index) % 3;
+                }
+                if ($count === 2) {
+                    $col[2] = $col[0];
+                    $row[2] = $row[0];
+                }
+                $c2 = [];
+                $idx2 = [];
+                $unitType = "";
+                $unitIndex = -1;
+                if ($col[0] === $col[1] && $col[0] === $col[2]) {
+                    $unitIndex = $this->COL($idx[$cell[0]]);
+                    $this->getCandidateListOfCol($unitIndex, $c2, $idx2);
+                    $unitType = "col";
+                } else if ($row[0] === $row[1] && $row[0] === $row[2]) {
+                    $unitIndex = $this->ROW($idx[$cell[0]]);
+                    $this->getCandidateListOfRow($unitIndex, $c2, $idx2);
+                    $unitType = "row";
+                } else {
+                    continue;
+                }
+                $mask = $this->n2b($n);
+                $excludedCells = [];
+                for ($i = 0; $i < 9; $i++) {
+                    $index = $idx2[$i];
+                    if ($this->isSolved($index)) continue;
+                    $again = false;
+                    for ($j = 0; $j < $count; $j++) {
+                        if ($index === $idx[$cell[$j]]) {
+                            $again = true;
+                            break;
+                        }
+                    }
+                    if ($again) continue;
+                    if (($this->candidates[$index] & $mask) === 0) continue;
+                    $this->candidates[$index] &= ~$mask;
+                    $excludedCells[] = $index;
+                }
+                if (empty($excludedCells)) continue;
+                $boxName = "第" . ($box + 1) . "宫";
+                $unitName = $unitType === "row" ? "第" . ($unitIndex + 1) . "行" : "第" . ($unitIndex + 1) . "列";
+                $cellsStr = implode("和", array_map(function($j) use ($idx, $cell, $this) {
+                    return $this->getCoordStr($idx[$cell[$j]]);
+                }, range(0, $count - 1)));
+                $excludedStr = implode("、", array_map([$this, 'getCoordStr'], $excludedCells));
+                $this->updateCandidates();
+                return [
+                    'technique' => 'Pointing',
+                    'cells' => array_map(function($j) use ($idx, $cell) { return $idx[$cell[$j]]; }, range(0, $count - 1)),
+                    'excluded' => $excludedCells,
+                    'value' => $n,
+                    'description' => $boxName . "中，数字" . $n . "的候选位置" . $cellsStr . "都在" . $unitName . "上，因此" . $unitName . "其他位置" . $excludedStr . "排除候选值" . $n . "。"
+                ];
+            }
+        }
+        return null;
+    }
+    private function findNakedSet(&$c, &$idx, $n, $unitType, $unitIndex) {
+        for ($mask = 0; $mask < 0x1ff; $mask++) {
+            if ($this->bc($mask) !== $n) continue;
+            $pos = [];
+            $i2 = 0;
+            for ($j = 0; $j < 9; $j++) {
+                if ($c[$j] && ($c[$j] & ~$mask) === 0) {
+                    $pos[$i2] = $idx[$j];
+                    $i2++;
+                }
+            }
+            if ($i2 !== $n) continue;
+            $excludedCells = [];
+            $excludedValues = [];
+            for ($j = 0; $j < 9; $j++) {
+                $index = $idx[$j];
+                if ($this->isSolved($index)) continue;
+                $again = false;
+                for ($k = 0; $k < $n; $k++) {
+                    if ($index === $pos[$k]) {
+                        $again = true;
+                        break;
+                    }
+                }
+                if ($again) continue;
+                $removed = $this->candidates[$idx[$j]] & $mask;
+                if ($removed === 0) continue;
+                $this->candidates[$idx[$j]] &= ~$mask;
+                $excludedCells[] = $index;
+                for ($bit = 0; $bit < 9; $bit++) {
+                    if ($removed & (1 << $bit)) {
+                        $excludedValues[] = $bit + 1;
+                    }
+                }
+            }
+            if (empty($excludedCells)) continue;
+            $unitName = $unitType === "box" ? "第" . ($unitIndex + 1) . "宫" : 
+                       ($unitType === "row" ? "第" . ($unitIndex + 1) . "行" : "第" . ($unitIndex + 1) . "列");
+            $cellsStr = implode("和", array_map([$this, 'getCoordStr'], $pos));
+            $valuesStr = implode(",", array_filter(range(1, 9), function($v) use ($mask) {
+                return $mask & (1 << ($v - 1));
+            }));
+            $excludedStr = implode("、", array_map([$this, 'getCoordStr'], $excludedCells));
+            $excludedValuesStr = implode("、", array_unique($excludedValues));
+            $subsetName = $n === 2 ? "数对" : ($n === 3 ? "数组" : "数组");
+            $this->updateCandidates();
+            return [
+                'technique' => 'NakedSubset',
+                'cells' => $pos,
+                'excluded' => $excludedCells,
+                'values' => array_filter(range(1, 9), function($v) use ($mask) {
+                    return $mask & (1 << ($v - 1));
+                }),
+                'excludedValues' => array_unique($excludedValues),
+                'description' => $unitName . "中，坐标" . $cellsStr . "形成裸" . $subsetName . "[" . $valuesStr . "]，删除" . $excludedStr . "的相同候选值" . $excludedValuesStr . "。"
+            ];
+        }
+        return null;
+    }
+    private function p_findSubset() {
+        $c = [];
+        $idx = [];
+        for ($n = 2; $n <= 4; $n++) {
+            for ($i = 0; $i < 9; $i++) {
+                $this->getCandidateListOfBox($i, $c, $idx);
+                $result = $this->findNakedSet($c, $idx, $n, "box", $i);
+                if ($result) return $result;
+                $this->getCandidateListOfCol($i, $c, $idx);
+                $result = $this->findNakedSet($c, $idx, $n, "col", $i);
+                if ($result) return $result;
+                $this->getCandidateListOfRow($i, $c, $idx);
+                $result = $this->findNakedSet($c, $idx, $n, "row", $i);
+                if ($result) return $result;
+            }
+        }
+        return null;
+    }
+    private function p_findXWings() {
+        $c = []; $idx = []; $cell = []; $c2 = []; $idx2 = []; $cell2 = [];
+        $c34 = [[], []]; $idx34 = [[], []];
+        for ($n = 1; $n <= 9; $n++) {
+            for ($i = 0; $i < 9; $i++) {
+                $this->getCandidateListOfRow($i, $c, $idx);
+                if ($this->getCandidateCountOfList($c, $n, $cell) !== 2) continue;
+                for ($j = $i + 1; $j < 9; $j++) {
+                    $this->getCandidateListOfRow($j, $c2, $idx2);
+                    if ($this->getCandidateCountOfList($c2, $n, $cell2) !== 2) continue;
+                    if ($cell[0] !== $cell2[0] || $cell[1] !== $cell2[1]) continue;
+                    $this->getCandidateListOfCol($cell[0], $c34[0], $idx34[0]);
+                    $this->getCandidateListOfCol($cell[1], $c34[1], $idx34[1]);
+                    $excludedCells = [];
+                    for ($l = 0; $l < 2; $l++) {
+                        for ($k = 0; $k < 9; $k++) {
+                            if ($i === $k || $j === $k || $this->isSolved($idx34[$l][$k])) continue;
+                            if ($c34[$l][$k] & $this->n2b($n)) {
+                                $this->candidates[$idx34[$l][$k]] &= ~$this->n2b($n);
+                                $excludedCells[] = $idx34[$l][$k];
+                            }
+                        }
+                    }
+                    if (empty($excludedCells)) continue;
+                    $excludedStr = implode("、", array_map([$this, 'getCoordStr'], $excludedCells));
+                    $this->updateCandidates();
+                    return [
+                        'technique' => 'X_Wing',
+                        'cells' => [$idx[$cell[0]], $idx[$cell[1]], $idx2[$cell[0]], $idx2[$cell[1]]],
+                        'excluded' => $excludedCells,
+                        'value' => $n,
+                        'description' => "第" . ($i + 1) . "行和第" . ($j + 1) . "行中，数字" . $n . "的候选位置形成X翼，第" . ($cell[0] + 1) . "列和第" . ($cell[1] + 1) . "列其他位置" . $excludedStr . "排除候选值" . $n . "。"
+                    ];
+                }
+            }
+            for ($i = 0; $i < 9; $i++) {
+                $this->getCandidateListOfCol($i, $c, $idx);
+                if ($this->getCandidateCountOfList($c, $n, $cell) !== 2) continue;
+                for ($j = $i + 1; $j < 9; $j++) {
+                    $this->getCandidateListOfCol($j, $c2, $idx2);
+                    if ($this->getCandidateCountOfList($c2, $n, $cell2) !== 2) continue;
+                    if ($cell[0] !== $cell2[0] || $cell[1] !== $cell2[1]) continue;
+                    $this->getCandidateListOfRow($cell[0], $c34[0], $idx34[0]);
+                    $this->getCandidateListOfRow($cell[1], $c34[1], $idx34[1]);
+                    $excludedCells = [];
+                    for ($l = 0; $l < 2; $l++) {
+                        for ($k = 0; $k < 9; $k++) {
+                            if ($i === $k || $j === $k || $this->isSolved($idx34[$l][$k])) continue;
+                            if ($c34[$l][$k] & $this->n2b($n)) {
+                                $this->candidates[$idx34[$l][$k]] &= ~$this->n2b($n);
+                                $excludedCells[] = $idx34[$l][$k];
+                            }
+                        }
+                    }
+                    if (empty($excludedCells)) continue;
+                    $excludedStr = implode("、", array_map([$this, 'getCoordStr'], $excludedCells));
+                    $this->updateCandidates();
+                    return [
+                        'technique' => 'X_Wing',
+                        'cells' => [$idx[$cell[0]], $idx[$cell[1]], $idx2[$cell[0]], $idx2[$cell[1]]],
+                        'excluded' => $excludedCells,
+                        'value' => $n,
+                        'description' => "第" . ($i + 1) . "列和第" . ($j + 1) . "列中，数字" . $n . "的候选位置形成X翼，第" . ($cell[0] + 1) . "行和第" . ($cell[1] + 1) . "行其他位置" . $excludedStr . "排除候选值" . $n . "。"
+                    ];
+                }
+            }
+        }
+        return null;
+    }
+    private function p_findSwordfish() {
+        return null;
+    }
+    private function p_findXyWings() {
+        return null;
+    }
+    private function p_findWWings() {
+        return null;
+    }
+    private function p_findXyzWings() {
+        return null;
+    }
+    private function p_findXChains() {
+        return null;
+    }
+    private function p_findXyChains() {
+        return null;
+    }
+    private function p_findSkyscraper() {
+        return null;
+    }
+    private function p_findUniqueRectangle() {
+        return null;
+    }
+    public function solve($auto = true) {
+        $round = 0;
+        $this->steps[] = [
+            'step' => $round,
+            'technique' => 'Initial',
+            'description' => '初始题目状态',
+            'puzzle' => $this->puzzle,
+            'candidates' => $this->candidates
+        ];
+        $round++;
+        $pattern = [
+            [$this, 'p_findSingle'],
+            [$this, 'p_findClaiming'],
+            [$this, 'p_findPointing'],
+            [$this, 'p_findSubset'],
+            [$this, 'p_findXWings'],
+            [$this, 'p_findSwordfish'],
+            [$this, 'p_findXyWings'],
+            [$this, 'p_findWWings'],
+            [$this, 'p_findXyzWings'],
+            [$this, 'p_findXChains'],
+            [$this, 'p_findXyChains'],
+            [$this, 'p_findSkyscraper'],
+            [$this, 'p_findUniqueRectangle'],
+        ];
+        while (true) {
+            $found = false;
+            foreach ($pattern as $technique) {
+                $result = call_user_func($technique);
+                if ($result) {
+                    $this->steps[] = array_merge([
+                        'step' => $round,
+                        'puzzle' => $this->puzzle,
+                        'candidates' => $this->candidates
+                    ], $result);
+                    $round++;
+                    $found = true;
+                    $this->updateCandidates();
+                    break;
+                }
+            }
+            if (!$found || !$auto) break;
+        }
+        return $this->steps;
+    }
+    public function getSteps() {
+        return $this->steps;
+    }
+    public function getPuzzle() {
+        return $this->puzzle;
+    }
+    public function getOriginalPuzzle() {
+        return $this->originalPuzzle;
+    }
+    public function getCandidates() {
+        return $this->candidates;
+    }
+}
+$solver = new SudokuSolver($puzzleInput);
+$steps = $solver->solve(true);
+$originalPuzzle = $solver->getOriginalPuzzle();
+$stepsJson = json_encode($steps, JSON_UNESCAPED_UNICODE);
+$originalPuzzleJson = json_encode($originalPuzzle);
 ?>
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -53,7 +698,15 @@ canvas{display:block;max-width:100%;height:auto;border:2px solid #333333;}
 .step-canvas-wrapper canvas{border:2px solid #333333;}
 .status{margin-top:12px;padding:8px 12px;background:#e7f3ff;border-radius:6px;font-size:14px;color:#004085;}
 footer{margin-top:32px;padding:16px;background:#f8f9fa;border-radius:8px;font-size:14px;color:#6c757d;}
-@media print{.toolbar,.share-row,textarea,label,footer,.status{display:none;}.layout{grid-template-columns:1fr;gap:12px;}.board-wrapper,.step-card,.step-canvas-wrapper{border:3px solid #000;page-break-inside:avoid;}.step-card{page-break-after:always;margin-bottom:20px;}}
+@media print{
+*{background:white!important;color:black!important;}
+.toolbar,.share-row,textarea,label,footer,.status{display:none!important;}
+.layout{grid-template-columns:1fr!important;gap:12px!important;}
+.board-wrapper,.step-card,.step-canvas-wrapper{border:3px solid #000!important;page-break-inside:avoid!important;}
+.step-card{page-break-after:always!important;page-break-before:auto!important;margin-bottom:0!important;padding-bottom:20px!important;}
+.step-card:last-child{page-break-after:auto!important;}
+h1{page-break-after:avoid!important;}
+}
 @media (max-width:980px){body{padding:16px;}.layout{grid-template-columns:1fr;}}
 </style>
 </head>
@@ -65,113 +718,142 @@ footer{margin-top:32px;padding:16px;background:#f8f9fa;border-radius:8px;font-si
 <div class="toolbar">
 <button id="btn-reset" class="danger">清空棋盘</button>
 <button id="btn-example">导入示例</button>
-<button id="btn-edit">进入编辑模式</button>
-<button id="btn-step">执行单步</button>
-<button id="btn-solve">自动求解</button>
-<button id="btn-step-clear">清空解析记录</button>
 <button id="btn-print">打印</button>
 </div>
 <div class="board-wrapper">
 <canvas id="board" width="666" height="666">Canvas not supported.</canvas>
 </div>
-<div class="digit-panel" id="digit-panel" hidden>
-<button data-digit="1">1</button>
-<button data-digit="2">2</button>
-<button data-digit="3">3</button>
-<button data-digit="4">4</button>
-<button data-digit="5">5</button>
-<button data-digit="6">6</button>
-<button data-digit="7">7</button>
-<button data-digit="8">8</button>
-<button data-digit="9">9</button>
-<button data-digit="0">清空</button>
-</div>
 <div class="share-row">
-<button id="btn-share">生成分享链接</button>
-<input id="share-link" type="text" readonly placeholder="链接将显示在这里">
+<label for="puzzle-input">批量导入（支持 0/ . 表示空）：</label>
+<textarea id="puzzle-input" placeholder="例如：530070000600195000098000060..."><?php echo htmlspecialchars($puzzleInput); ?></textarea>
+<button id="btn-apply">应用到棋盘</button>
 </div>
-<p class="status" id="status-text">编辑模式：可以点击棋盘录入题目。</p>
+<p class="status" id="status-text">已自动求解，查看下方步骤。</p>
 </section>
 <section>
-<label for="puzzle-input">批量导入（支持 0/ . 表示空，忽略非数字字符）：</label>
-<textarea id="puzzle-input" placeholder="例如：530070000600195000098000060..."><?php echo htmlspecialchars($puzzleInput); ?></textarea>
-<div class="toolbar" style="margin-top:12px;">
-<button id="btn-apply">应用到棋盘</button>
-<button id="btn-export">导出当前棋盘</button>
-</div>
 <div class="steps-container" id="steps"></div>
 </section>
 </div>
-<footer>提示：点击棋盘中的格子以选择单元，再使用下方数字面板填入数字。执行单步后将自动切换到演示模式，如需修改题目请点击"进入编辑模式"重新调整。</footer>
+<footer>提示：所有解题步骤已由PHP在服务器端计算完成。</footer>
 <script>
 (function(){
 const CHAR_W=14,CHAR_H=14,HALF_CHAR_W=Math.floor(CHAR_W/2),HALF_CHAR_H=Math.floor(CHAR_H/2),CELL_W=3*CHAR_W,CELL_H=3*CHAR_H,PUZZLE_W=9*(1+CELL_W),PUZZLE_H=9*(1+CELL_H);
-let p=[],originalPuzzle=[],candidate=[],edit=true,p2=[],sharelink,tCOL=[],tROW=[],tBOX=[];
-for(let i=0;i<81;i++){tCOL[i]=i%9;tROW[i]=Math.floor(i/9);tBOX[i]=3*Math.floor(tROW[i]/3)+Math.floor(tCOL[i]/3);}
-const tech={NakedSingle:'显性单数 (Naked Single)',HiddenSingle:'隐性单数 (Hidden Single)',Claiming:'占位排除 (Claiming)',Pointing:'定向排除 (Pointing)',NakedSubset:'显性子集 (Naked Subset)',HiddenSubset:'隐性子集 (Hidden Subset)',X_Wing:'X 翼 (X-Wing)',XY_Wing:'XY 翼 (XY-Wing)',W_Wing:'W 翼 (W-Wing)',XYZ_Wing:'XYZ 翼 (XYZ-Wing)',X_Chains:'X 链 (X-Chains)',XY_Chains:'XY 链 (XY-Chains)',Swordfish:'剑鱼 (Swordfish)',Skyscraper:'摩天楼 (Skyscraper)',UniqueRectangle:'唯一矩形 (Unique Rectangle)'};
-let hs_ns="2",isSolverAll=false,msg='',stepDescription='',initialPuzzleSaved=false;
-function COL(i){return tCOL[i];}
-function ROW(i){return tROW[i];}
-function BOX(i){return tBOX[i];}
-function getCoordStr(i){return "("+(COL(i)+1)+","+(ROW(i)+1)+")";}
+const tech=<?php echo json_encode($tech, JSON_UNESCAPED_UNICODE); ?>;
+const steps=<?php echo $stepsJson; ?>;
+const originalPuzzle=<?php echo $originalPuzzleJson; ?>;
+function COL(i){return i%9;}
+function ROW(i){return Math.floor(i/9);}
+function BOX(i){return 3*Math.floor(ROW(i)/3)+Math.floor(COL(i)/3);}
 function n2b(n){return 1<<(n-1);}
-function bc(n){let c=0;for(let i=0;i<9;i++){if(n&(1<<i))c+=1;}return c;}
-function b2n(mask){for(let i=0;i<9;i++){if(mask&(1<<i))return 1+i;}return 0;}
-function getIdxFromColRow(col,row){return 9*row+col;}
-function getIdxFromBoxIdx(box,i){const bcol=box%3,brow=Math.floor(box/3),ccol=i%3,crow=Math.floor(i/3);return 9*(3*brow+crow)+3*bcol+ccol;}
-function isSolved(i){return p[i]!==0;}
 function isOriginal(i){return originalPuzzle[i]!==0;}
-function isSingle(candidateMask){let c=0,n;for(let i=0;i<9;i++){if(candidateMask&(1<<i)){c+=1;n=i+1;}}if(c===1)return n;else return 0;}
-function getCandidateListOfBox(box,c,idx){for(let cell=0;cell<9;cell++){const i=getIdxFromBoxIdx(box,cell);c[cell]=isSolved(i)?0:candidate[i];idx[cell]=i;}}
-function getCandidateListOfCol(col,c,idx){for(let row=0;row<9;row++){const i=getIdxFromColRow(col,row);c[row]=isSolved(i)?0:candidate[i];idx[row]=i;}}
-function getCandidateListOfRow(row,c,idx){for(let col=0;col<9;col++){const i=getIdxFromColRow(col,row);c[col]=isSolved(i)?0:candidate[i];idx[col]=i;}}
-function getCandidateCountOfList(candidateList,n,cell){let c=0;const mask=n2b(n);cell.length=0;for(let i=0;i<9;i++){if(candidateList[i]&mask){cell[c++]=i;}}return c;}
-function initCandidates(){for(let row=0;row<9;row++){for(let col=0;col<9;col++){const i=getIdxFromColRow(col,row);if(!isSolved(i)){candidate[i]=0x1ff;}else{candidate[i]=n2b(p[i]);}}}updateCandidates();}
-function updateCandidates(){for(let box=0;box<9;box++){for(let cell=0;cell<9;cell++){const index=getIdxFromBoxIdx(box,cell);if(!isSolved(index))continue;const n=p[index];for(let i=0;i<9;i++){if(i!==cell){candidate[getIdxFromBoxIdx(box,i)]&=~n2b(n);}}}}for(let col=0;col<9;col++){for(let row=0;row<9;row++){const index=getIdxFromColRow(col,row);if(!isSolved(index))continue;const n=p[index];for(let i=0;i<9;i++){if(i!==row){candidate[getIdxFromColRow(col,i)]&=~n2b(n);}}}}for(let row=0;row<9;row++){for(let col=0;col<9;col++){const index=getIdxFromColRow(col,row);if(!isSolved(index))continue;const n=p[index];for(let i=0;i<9;i++){if(i!==col){candidate[getIdxFromColRow(i,row)]&=~n2b(n);}}}}}
-let ht1=[],ht2=[],ht3=[],ht4=[],htMask=[];
-function fillCell(ctx,x,y,color){ctx.fillStyle=color;ctx.fillRect(x,y,CELL_W+1,CELL_H+1);ctx.fillStyle='Black';}
-function renderPuzzle(name){const c=document.getElementById(name);if(!c)return;const ctx=c.getContext('2d');ctx.lineWidth=1;ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillStyle='#FFFFFF';ctx.fillRect(0,0,PUZZLE_W,PUZZLE_H);ctx.fillStyle='Black';for(let i=0;i<81;i++){const x=COL(i)*(1+CELL_W),y=ROW(i)*(1+CELL_H);if(ht1.indexOf(i)!==-1){fillCell(ctx,x,y,'#B6FF00');}else if(ht2.indexOf(i)!==-1){fillCell(ctx,x,y,'#F8FF90');}const cx=x+Math.floor(CHAR_W/2),cy=y+Math.floor(CHAR_H/2)+1;if(p[i]!==0){ctx.font='30px Arial';if(isOriginal(i)){ctx.fillStyle='#0066cc';}else{ctx.fillStyle='#cc6600';}ctx.fillText(p[i],cx+CHAR_W,cy+CHAR_H);ctx.fillStyle='Black';}else{ctx.font=CHAR_H+'px sans-serif';ctx.fillStyle='#999999';for(let j=0;j<9;j++){if(candidate[i]&n2b(1+j)){ctx.fillText(1+j,cx+(j%3)*CHAR_W,cy+Math.floor(j/3)*CHAR_H);}}const ht=ht3.indexOf(i);if(ht!==-1&&htMask[ht]!==0){ctx.fillStyle='Red';for(let j=0;j<9;j++){if(htMask[ht]&n2b(1+j)){const cxx=cx+(j%3)*CHAR_W,cyy=cy+Math.floor(j/3)*CHAR_H;ctx.fillText(1+j,cxx,cyy);ctx.beginPath();ctx.moveTo(cxx-HALF_CHAR_W,cyy-HALF_CHAR_H);ctx.lineTo(cxx+HALF_CHAR_W,cyy+HALF_CHAR_H);ctx.stroke();}}ctx.fillStyle='Black';}}}for(let i=1;i<9;i++){if(i%3===0){ctx.strokeStyle='Black';}else{ctx.strokeStyle='LightGray';}const x=i*(1+CELL_W),y=i*(1+CELL_H);ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,PUZZLE_H);ctx.moveTo(0,y);ctx.lineTo(PUZZLE_W,y);ctx.stroke();}ctx.strokeStyle='Red';for(let i=0;i<ht4.length;i+=3){const a=ht4[i],b=ht4[i+1],n=ht4[i+2]-1,xa=COL(a)*(1+CELL_W),ya=ROW(a)*(1+CELL_H),cxa=xa+(n%3)*CHAR_W,cya=ya+Math.floor(n/3)*CHAR_H,xb=COL(b)*(1+CELL_W),yb=ROW(b)*(1+CELL_H),cxb=xb+(n%3)*CHAR_W,cyb=yb+Math.floor(n/3)*CHAR_H;ctx.beginPath();ctx.rect(cxa,cya,CHAR_W,CHAR_H);ctx.rect(cxb,cyb,CHAR_W,CHAR_H);ctx.moveTo(cxa+HALF_CHAR_W,cya+HALF_CHAR_H);ctx.lineTo(cxb+HALF_CHAR_W,cyb+HALF_CHAR_H);ctx.stroke();}ctx.strokeStyle='Black';ht1=[];ht2=[];ht3=[];ht4=[];htMask=[];}
-function saveInitialState(){if(!initialPuzzleSaved){originalPuzzle=p.slice(0);addStep(0,"初始题目状态");initialPuzzleSaved=true;}}
-function addStep(round,description){const name='c'+round,steps=document.getElementById('steps'),card=document.createElement('div');card.className='step-card';const h2=document.createElement('h2');h2.textContent='步骤 '+round+(msg?': '+msg:'');card.appendChild(h2);if(description){const descDiv=document.createElement('div');descDiv.className='step-description';descDiv.textContent=description;card.appendChild(descDiv);}const canvasWrapper=document.createElement('div');canvasWrapper.className='step-canvas-wrapper';const c=document.createElement('canvas');c.setAttribute('id',name);c.setAttribute('width',PUZZLE_W);c.setAttribute('height',PUZZLE_H);canvasWrapper.appendChild(c);card.appendChild(canvasWrapper);steps.appendChild(card);renderPuzzle(name);}
-const pattern=[];
-function findSingle(c,idx,unitType,unitIndex){const cell=[];for(let n=1;n<=9;n++){if(getCandidateCountOfList(c,n,cell)!==1)continue;const i=idx[cell[0]];p[i]=n;candidate[i]=n2b(n);ht1.push(i);const unitName=unitType==="box"?"第"+(unitIndex+1)+"宫":unitType==="row"?"第"+(unitIndex+1)+"行":"第"+(unitIndex+1)+"列";stepDescription=unitName+"中，数字"+n+"只能出现在"+getCoordStr(i)+"，因此"+getCoordStr(i)+"="+n+"。";return true;}return false;}
-function p_findSingle(){if(hs_ns==="2"){for(let i=0;i<81;i++){if(isSolved(i))continue;const n=isSingle(candidate[i]);if(n===0)continue;p[i]=n;candidate[i]=n2b(n);ht1.push(i);msg=tech.NakedSingle;stepDescription="坐标"+getCoordStr(i)+"的候选数只有"+n+"，因此"+getCoordStr(i)+"="+n+"。";return true;}}msg=tech.HiddenSingle;const c=[],idx=[];for(let i=0;i<9;i++){getCandidateListOfBox(i,c,idx);if(findSingle(c,idx,"box",i)){ht2=idx.slice();return true;}getCandidateListOfCol(i,c,idx);if(findSingle(c,idx,"col",i)){ht2=idx.slice();return true;}getCandidateListOfRow(i,c,idx);if(findSingle(c,idx,"row",i)){ht2=idx.slice();return true;}}if(hs_ns==="1"){for(let i=0;i<81;i++){if(isSolved(i))continue;const n=isSingle(candidate[i]);if(n===0)continue;p[i]=n;candidate[i]=n2b(n);ht1.push(i);msg=tech.NakedSingle;stepDescription="坐标"+getCoordStr(i)+"的候选数只有"+n+"，因此"+getCoordStr(i)+"="+n+"。";return true;}}return false;}
-function findClaiming(c,idx,unitType,unitIndex){const cell=[];for(let n=1;n<=9;n++){const count=getCandidateCountOfList(c,n,cell);if(count!==2&&count!==3)continue;if(count===2)cell[2]=cell[0];if(BOX(idx[cell[0]])!==BOX(idx[cell[1]])||BOX(idx[cell[0]])!==BOX(idx[cell[2]]))continue;const c2=[],idx2=[],box=BOX(idx[cell[0]]);getCandidateListOfBox(box,c2,idx2);let changed=false;const mask=n2b(n),excludedCells=[];for(let i=0;i<9;i++){const index=idx2[i];if(isSolved(index))continue;let again=false;for(let j=0;j<count;j++){if(index===idx[cell[j]]){again=true;break;}}if(again)continue;if((candidate[index]&mask)===0)continue;candidate[index]&=~mask;changed=true;excludedCells.push(index);ht2=idx.slice();ht3.push(index);htMask.push(mask);}if(!changed)continue;for(let i=0;i<count;i++){ht1.push(idx[cell[i]]);}msg=tech.Claiming;const unitName=unitType==="row"?"第"+(unitIndex+1)+"行":"第"+(unitIndex+1)+"列",boxName="第"+(box+1)+"宫",cellsStr=Array.from({length:count},(_,j)=>getCoordStr(idx[cell[j]])).join("和"),excludedStr=excludedCells.map(i=>getCoordStr(i)).join("、");stepDescription=unitName+"中，数字"+n+"的候选位置"+cellsStr+"都在"+boxName+"内，因此"+boxName+"其他位置"+excludedStr+"排除候选值"+n+"。";return true;}return false;}
-function p_findClaiming(){const c=[],idx=[];for(let i=0;i<9;i++){getCandidateListOfCol(i,c,idx);if(findClaiming(c,idx,"col",i))return true;getCandidateListOfRow(i,c,idx);if(findClaiming(c,idx,"row",i))return true;}return false;}
-function p_findPointing(){const c=[],idx=[],cell=[];for(let box=0;box<9;box++){getCandidateListOfBox(box,c,idx);for(let n=1;n<=9;n++){const count=getCandidateCountOfList(c,n,cell);if(count!==2&&count!==3)continue;const col=[],row=[];for(let i=0;i<count;i++){const index=idx[cell[i]];col[i]=COL(index)%3;row[i]=ROW(index)%3;}if(count===2){col[2]=col[0];row[2]=row[0];}const c2=[],idx2=[];let unitType="",unitIndex=-1;if(col[0]===col[1]&&col[0]===col[2]){unitIndex=COL(idx[cell[0]]);getCandidateListOfCol(unitIndex,c2,idx2);unitType="col";}else if(row[0]===row[1]&&row[0]===row[2]){unitIndex=ROW(idx[cell[0]]);getCandidateListOfRow(unitIndex,c2,idx2);unitType="row";}else{continue;}let changed=false;const mask=n2b(n),excludedCells=[];for(let i=0;i<9;i++){const index=idx2[i];if(isSolved(index))continue;let again=false;for(let j=0;j<count;j++){if(index===idx[cell[j]]){again=true;break;}}if(again)continue;if((candidate[index]&mask)===0)continue;candidate[index]&=~mask;changed=true;excludedCells.push(index);ht2=idx.slice();ht3.push(index);htMask.push(mask);}if(!changed)continue;for(let i=0;i<count;i++){ht1.push(idx[cell[i]]);}msg=tech.Pointing;const boxName="第"+(box+1)+"宫",unitName=unitType==="row"?"第"+(unitIndex+1)+"行":"第"+(unitIndex+1)+"列",cellsStr=Array.from({length:count},(_,j)=>getCoordStr(idx[cell[j]])).join("和"),excludedStr=excludedCells.map(i=>getCoordStr(i)).join("、");stepDescription=boxName+"中，数字"+n+"的候选位置"+cellsStr+"都在"+unitName+"上，因此"+unitName+"其他位置"+excludedStr+"排除候选值"+n+"。";return true;}}return false;}
-function findNakedSet(c,idx,n,unitType,unitIndex){const pos=[];for(let mask=0;mask<0x1ff;mask++){if(bc(mask)!==n)continue;let i2=0;for(let j=0;j<9;j++){if(c[j]&&(c[j]&~mask)===0){pos[i2]=idx[j];i2++;}}if(i2!==n)continue;let changed=false;const excludedValues=[],excludedCells=[];for(let j=0;j<9;j++){const index=idx[j];if(isSolved(index))continue;let again=false;for(let k=0;k<n;k++){if(index===pos[k]){again=true;break;}}if(again)continue;const removed=candidate[idx[j]]&mask;if(removed===0)continue;htMask.push(removed);ht3.push(idx[j]);candidate[idx[j]]&=~mask;changed=true;excludedCells.push(index);for(let bit=0;bit<9;bit++){if(removed&(1<<bit)){excludedValues.push(bit+1);}}}if(!changed)continue;for(let j=0;j<n;j++){ht1.push(pos[j]);}ht2=idx.slice();msg=tech.NakedSubset;const unitName=unitType==="box"?"第"+(unitIndex+1)+"宫":unitType==="row"?"第"+(unitIndex+1)+"行":"第"+(unitIndex+1)+"列",cellsStr=pos.map(i=>getCoordStr(i)).join("和"),valuesStr=Array.from({length:9},(_,i)=>(mask&(1<<i))?i+1:null).filter(v=>v!==null).join(","),excludedStr=excludedCells.map(i=>getCoordStr(i)).join("、"),excludedValuesStr=[...new Set(excludedValues)].sort((a,b)=>a-b).join("、");stepDescription=unitName+"中，坐标"+cellsStr+"形成裸"+(n===2?"数对":n===3?"数组":"数组")+"["+valuesStr+"]，删除"+excludedStr+"的相同候选值"+excludedValuesStr+"。";return true;}return false;}
-function p_findSubset(){const c=[],idx=[];for(let n=2;n<=4;n++){for(let i=0;i<9;i++){getCandidateListOfBox(i,c,idx);if(findNakedSet(c,idx,n,"box",i))return true;getCandidateListOfCol(i,c,idx);if(findNakedSet(c,idx,n,"col",i))return true;getCandidateListOfRow(i,c,idx);if(findNakedSet(c,idx,n,"row",i))return true;}}return false;}
-function findXWings(isRow){const c=[],idx=[],cell=[],c2=[],idx2=[],cell2=[],c34=[[],[]],idx34=[[],[]];for(let n=1;n<=9;n++){for(let i=0;i<9;i++){if(isRow){getCandidateListOfRow(i,c,idx);}else{getCandidateListOfCol(i,c,idx);}if(getCandidateCountOfList(c,n,cell)!==2)continue;for(let j=i+1;j<9;j++){if(isRow){getCandidateListOfRow(j,c2,idx2);}else{getCandidateListOfCol(j,c2,idx2);}if(getCandidateCountOfList(c2,n,cell2)!==2)continue;if(cell[0]!==cell2[0]||cell[1]!==cell2[1])continue;let changed=false;if(isRow){getCandidateListOfCol(cell[0],c34[0],idx34[0]);getCandidateListOfCol(cell[1],c34[1],idx34[1]);}else{getCandidateListOfRow(cell[0],c34[0],idx34[0]);getCandidateListOfRow(cell[1],c34[1],idx34[1]);}const excludedCells=[];for(let l=0;l<2;l++){for(let k=0;k<9;k++){if(i===k||j===k||isSolved(idx34[l][k]))continue;if(c34[l][k]&n2b(n)){changed=true;candidate[idx34[l][k]]&=~n2b(n);excludedCells.push(idx34[l][k]);ht3.push(idx34[l][k]);htMask.push(n2b(n));}}}if(!changed)continue;ht1.push(idx[cell[0]]);ht1.push(idx[cell[1]]);ht1.push(idx2[cell[0]]);ht1.push(idx2[cell[1]]);ht2=idx.concat(idx2).concat(idx34[0]).concat(idx34[1]);ht4.push(idx[cell[0]]);ht4.push(idx2[cell[1]]);ht4.push(n);ht4.push(idx[cell[1]]);ht4.push(idx2[cell[0]]);ht4.push(n);msg=tech.X_Wing;const rows=isRow?[i,j]:[cell[0],cell[1]],cols=isRow?[cell[0],cell[1]]:[i,j],excludedStr=excludedCells.map(i=>getCoordStr(i)).join("、");stepDescription="第"+(rows[0]+1)+(isRow?"行":"列")+"和第"+(rows[1]+1)+(isRow?"行":"列")+"中，数字"+n+"的候选位置形成X翼，第"+(cols[0]+1)+(isRow?"列":"行")+"和第"+(cols[1]+1)+(isRow?"列":"行")+"其他位置"+excludedStr+"排除候选值"+n+"。";return true;}}}return false;}
-function p_findXWings(){return findXWings(true)||findXWings(false);}
-function findSwordfish(isRow){const c=[],idx=[],cell=[],rows=[],cols=[];for(let n=1;n<=9;n++){for(let i=0;i<9;i++){if(isRow){getCandidateListOfRow(i,c,idx);}else{getCandidateListOfCol(i,c,idx);}const count=getCandidateCountOfList(c,n,cell);if(count===2||count===3){rows.push(i);cols.push(cell.slice());}}if(rows.length<3)continue;for(let i=0;i<rows.length-2;i++){for(let j=i+1;j<rows.length-1;j++){for(let k=j+1;k<rows.length;k++){const allCols=new Set([...cols[i],...cols[j],...cols[k]]);if(allCols.size!==3)continue;const colArray=Array.from(allCols);let changed=false,excludedCells=[];for(let col of colArray){if(isRow){getCandidateListOfCol(col,c,idx);}else{getCandidateListOfRow(col,c,idx);}for(let r=0;r<9;r++){if(r===rows[i]||r===rows[j]||r===rows[k]||isSolved(idx[r]))continue;if(c[r]&n2b(n)){changed=true;candidate[idx[r]]&=~n2b(n);excludedCells.push(idx[r]);ht3.push(idx[r]);htMask.push(n2b(n));}}}if(!changed)continue;ht1.push(idx[cols[i][0]]);ht1.push(idx[cols[i][1]]);if(cols[i].length>2)ht1.push(idx[cols[i][2]]);ht1.push(idx[cols[j][0]]);ht1.push(idx[cols[j][1]]);if(cols[j].length>2)ht1.push(idx[cols[j][2]]);ht1.push(idx[cols[k][0]]);ht1.push(idx[cols[k][1]]);if(cols[k].length>2)ht1.push(idx[cols[k][2]]);msg=tech.Swordfish;const excludedStr=excludedCells.map(i=>getCoordStr(i)).join("、");stepDescription="第"+(rows[i]+1)+(isRow?"行":"列")+"、第"+(rows[j]+1)+(isRow?"行":"列")+"和第"+(rows[k]+1)+(isRow?"行":"列")+"中，数字"+n+"的候选位置形成剑鱼，第"+(colArray[0]+1)+(isRow?"列":"行")+"、第"+(colArray[1]+1)+(isRow?"列":"行")+"和第"+(colArray[2]+1)+(isRow?"列":"行")+"其他位置"+excludedStr+"排除候选值"+n+"。";return true;}}}}return false;}
-function p_findSwordfish(){return findSwordfish(true)||findSwordfish(false);}
-function findXyWings1(){for(let i=0;i<81;i++){if(isSolved(i)||bc(candidate[i])!==2)continue;const box=BOX(i),c=[],idx=[],c2=[],idx2=[],w=[];getCandidateListOfRow(ROW(i),c,idx);for(let j=0;j<9;j++){if(idx[j]===i||isSolved(idx[j])||bc(c[j])!==2||(c[j]&candidate[i])===0||BOX(idx[j])===box)continue;w[0]=idx[j];getCandidateListOfCol(COL(i),c2,idx2);for(let k=0;k<9;k++){if(idx2[k]===i||isSolved(idx2[k])||bc(c2[k])!==2||candidate[w[0]]!==(c2[k]^candidate[i])||BOX(idx2[k])===box)continue;w[1]=idx2[k];if(BOX(w[0])===BOX(w[1]))continue;const i3=getIdxFromColRow(COL(w[0]),ROW(w[1]));if(isSolved(i3))continue;const mask=candidate[w[0]]&candidate[w[1]];if((candidate[i3]&mask)===0)continue;candidate[i3]&=~mask;ht1.push(i);ht1.push(w[0]);ht1.push(w[1]);ht3.push(i3);htMask.push(mask);msg=tech.XY_Wing;stepDescription="坐标"+getCoordStr(i)+"、"+getCoordStr(w[0])+"和"+getCoordStr(w[1])+"形成XY翼，坐标"+getCoordStr(i3)+"排除候选值"+Array.from({length:9},(_,i)=>(mask&(1<<i))?i+1:null).filter(v=>v!==null).join("、")+"。";return true;}}}return false;}
-function findXyWings2(){const c=[],idx=[],c2=[],idx2=[];for(let box=0;box<9;box++){getCandidateListOfBox(box,c,idx);for(let cell=0;cell<9;cell++){if(isSolved(idx[cell])||bc(c[cell])!==2)continue;for(let cell2=0;cell2<9;cell2++){if(cell2===cell||isSolved(idx[cell2])||bc(c[cell2])!==2)continue;if((c[cell]&c[cell2])===0)continue;const col=COL(idx[cell]),row=ROW(idx[cell]),col2=COL(idx[cell2]),row2=ROW(idx[cell2]),x=c[cell]^c[cell2];if(x===0)continue;let i3,mask,changed=false;if(col!==col2){getCandidateListOfCol(col,c2,idx2);for(let i=0;i<9;i++){if(isSolved(idx2[i])||bc(c2[i])!==2||c2[i]!==x||BOX(idx2[i])===box)continue;i3=getIdxFromColRow(col,Math.floor(idx2[i]/9));mask=c2[i]&c[cell2];for(let j=0;j<9;j++){if(!isSolved(idx2[j])&&Math.floor(idx2[j]/9)!==row&&(c2[j]&mask)!==0&&BOX(idx2[j])===box){changed=true;candidate[idx2[j]]&=~mask;ht3.push(idx2[j]);htMask.push(mask);}}getCandidateListOfCol(col2,c2,idx2);for(let j=0;j<9;j++){if(!isSolved(idx2[j])&&(c2[j]&mask)!==0&&BOX(idx2[j])===BOX(i3)){changed=true;candidate[idx2[j]]&=~mask;ht3.push(idx2[j]);htMask.push(mask);}}break;}if(!changed&&row!==row2){getCandidateListOfRow(row,c2,idx2);for(let i=0;i<9;i++){if(isSolved(idx2[i])||bc(c2[i])!==2||c2[i]!==x||BOX(idx2[i])===box)continue;i3=getIdxFromColRow(COL(idx2[i]),row);mask=c2[i]&c[cell2];for(let j=0;j<9;j++){if(!isSolved(idx2[j])&&COL(idx2[j])!==col&&(c2[j]&mask)!==0&&BOX(idx2[j])===box){changed=true;candidate[idx2[j]]&=~mask;ht3.push(idx2[j]);htMask.push(mask);}}getCandidateListOfRow(row2,c2,idx2);for(let j=0;j<9;j++){if(!isSolved(idx2[j])&&(c2[j]&mask)!==0&&BOX(idx2[j])===BOX(i3)){changed=true;candidate[idx2[j]]&=~mask;ht3.push(idx2[j]);htMask.push(mask);}}break;}}if(!changed)continue;ht1.push(idx[cell]);ht1.push(idx[cell2]);ht1.push(i3);msg=tech.XY_Wing;stepDescription="第"+(box+1)+"宫中坐标"+getCoordStr(idx[cell])+"和"+getCoordStr(idx[cell2])+"形成XY翼，排除相关候选值。";return true;}}}return false;}
-function p_findXyWings(){return findXyWings1()||findXyWings2();}
-function isChanged(a,b,mask){let changed=false,c=[],idx=[];if(COL(a)===COL(b)){getCandidateListOfCol(COL(a),c,idx);for(let k=0;k<9;k++){if(idx[k]!==a&&idx[k]!==b&&!isSolved(idx[k])&&(c[k]&mask)!==0){changed=true;candidate[idx[k]]&=~mask;ht3.push(idx[k]);htMask.push(mask);}}}else if(ROW(a)===ROW(b)){getCandidateListOfRow(ROW(a),c,idx);for(let k=0;k<9;k++){if(idx[k]!==a&&idx[k]!==b&&!isSolved(idx[k])&&(c[k]&mask)!==0){changed=true;candidate[idx[k]]&=~mask;ht3.push(idx[k]);htMask.push(mask);}}}else{getCandidateListOfBox(BOX(a),c,idx);for(let k=0;k<9;k++){if(idx[k]!==a&&!isSolved(idx[k])&&(c[k]&mask)!==0&&(ROW(b)===ROW(idx[k])||COL(b)===COL(idx[k]))){changed=true;candidate[idx[k]]&=~mask;ht3.push(idx[k]);htMask.push(mask);}}getCandidateListOfBox(BOX(b),c,idx);for(let k=0;k<9;k++){if(idx[k]!==b&&!isSolved(idx[k])&&(c[k]&mask)!==0&&(ROW(a)===ROW(idx[k])||COL(a)===COL(idx[k]))){changed=true;candidate[idx[k]]&=~mask;ht3.push(idx[k]);htMask.push(mask);}}const ix1=getIdxFromColRow(COL(a),ROW(b));if(!isSolved(ix1)&&(candidate[ix1]&mask)!==0){changed=true;candidate[ix1]&=~mask;ht3.push(ix1);htMask.push(mask);}const ix2=getIdxFromColRow(COL(b),ROW(a));if(!isSolved(ix2)&&(candidate[ix2]&mask)!==0){changed=true;candidate[ix2]&=~mask;ht3.push(ix2);htMask.push(mask);}}return changed;}
-function findWWings(c,idx,i1,i2){const r1=ROW(i1),c1=COL(i1),r2=ROW(i2),c2=COL(i2);if(r1===r2||c1===c2)return false;const cell=[];for(let i=0;i<9;i++){if((n2b(1+i)&candidate[i1])===0)continue;if(getCandidateCountOfList(c,1+i,cell)!==2)continue;if(idx[cell[0]]===i1||idx[cell[0]]===i2||idx[cell[1]]===i1||idx[cell[1]]===i2)continue;const lr1=ROW(idx[cell[0]]),lc1=COL(idx[cell[0]]),lr2=ROW(idx[cell[1]]),lc2=COL(idx[cell[1]]);if((r1!==lr1||r2!==lr2)&&(c1!==lc1||c2!==lc2)&&(r1!==lr2||r2!==lr1)&&(c1!==lc2||c2!==lc1))continue;if(!isChanged(i1,i2,candidate[i1]&~n2b(1+i)))continue;ht1.push(i1);ht1.push(i2);ht2.push(getIdxFromColRow(lc1,lr1));ht2.push(getIdxFromColRow(lc2,lr2));msg=tech.W_Wing;stepDescription="坐标"+getCoordStr(i1)+"和"+getCoordStr(i2)+"形成W翼，排除相关候选值。";return true;}return false;}
-function p_findWWings(){for(let i=0;i<81;i++){if(isSolved(i)||bc(candidate[i])!==2)continue;const box1=BOX(i);for(let j=i+1;j<81;j++){if(isSolved(j)||candidate[i]!==candidate[j])continue;const box2=BOX(j);if(box1===box2)continue;const c=[],idx=[];for(let k=0;k<9;k++){getCandidateListOfCol(k,c,idx);if(findWWings(c,idx,i,j))return true;getCandidateListOfRow(k,c,idx);if(findWWings(c,idx,i,j))return true;getCandidateListOfBox(k,c,idx);if(findWWings(c,idx,i,j))return true;}}}return false;}
-function findXyzWings(c,idx,box,isRow,rowcol,i1,i2,c1,c2){const x=c1^c2;let changed=false,i3;for(let i=0;i<9;i++){if(isSolved(idx[i]))continue;if(bc(c[i])!==2||(c[i]&x)===0||(c1&c[i])===0||bc(c1&c[i])!==2||BOX(idx[i])===box)continue;i3=idx[i];const mask=c[i]&c2;for(let j=0;j<9;j++){if(!isSolved(idx[j])&&i1!==idx[j]&&i2!==idx[j]&&((isRow&&ROW(idx[j])!==rowcol)||(!isRow&&COL(idx[j])!==rowcol))&&(c[j]&mask)!==0&&BOX(idx[j])===box){changed=true;candidate[idx[j]]&=~mask;ht3.push(idx[j]);htMask.push(mask);}}break;}if(changed)return i3;else return -1;}
-function p_findXyzWings(){const c=[],idx=[],c2=[],idx2=[];for(let box=0;box<9;box++){getCandidateListOfBox(box,c,idx);for(let cell=0;cell<9;cell++){if(isSolved(idx[cell])||bc(c[cell])!==3)continue;for(let cell2=0;cell2<9;cell2++){if(cell2===cell||isSolved(idx[cell2])||bc(c[cell2])!==2)continue;if((c[cell]&c[cell2])===0||bc(c[cell]&c[cell2])!==2)continue;const col=COL(idx[cell]),row=ROW(idx[cell]),col2=COL(idx[cell2]),row2=ROW(idx[cell2]);if((c[cell]^c[cell2])===0)continue;let i3,mask;if(col!==col2){getCandidateListOfCol(col,c2,idx2);i3=findXyzWings(c2,idx2,box,true,row,idx[cell],idx[cell2],c[cell],c[cell2]);}if(row!==row2){getCandidateListOfRow(row,c2,idx2);i3=findXyzWings(c2,idx2,box,false,col,idx[cell],idx[cell2],c[cell],c[cell2]);}if(i3===-1)continue;ht1.push(idx[cell]);ht1.push(idx[cell2]);ht1.push(i3);msg=tech.XYZ_Wing;stepDescription="第"+(box+1)+"宫中坐标"+getCoordStr(idx[cell])+"、"+getCoordStr(idx[cell2])+"和"+getCoordStr(i3)+"形成XYZ翼，排除相关候选值。";return true;}}}return false;}
-function hasLink(a,b){return BOX(a)===BOX(b)||COL(a)===COL(b)||ROW(a)===ROW(b);}
-function p_findXChains(){const c=[],idx=[],cell=[];let cx,x=[];for(let n=1;n<=9;n++){cx=0;for(let row=0;row<9;row++){getCandidateListOfRow(row,c,idx);if(getCandidateCountOfList(c,n,cell)===2){const i1=idx[cell[0]],i2=idx[cell[1]];if(BOX(i1)!==BOX(i2)){x[cx*2+0]=i1;x[cx*2+1]=i2;cx+=1;}}}for(let col=0;col<9;col++){getCandidateListOfCol(col,c,idx);if(getCandidateCountOfList(c,n,cell)===2){const i1=idx[cell[0]],i2=idx[cell[1]];if(BOX(i1)!==BOX(i2)){x[cx*2+0]=i1;x[cx*2+1]=i2;cx+=1;}}}for(let box=0;box<9;box++){getCandidateListOfBox(box,c,idx);if(getCandidateCountOfList(c,n,cell)===2){x[cx*2+0]=idx[cell[0]];x[cx*2+1]=idx[cell[1]];cx+=1;}}if(cx<2)continue;for(let i=0;i<cx;i++){let len=0,chain=[],linked=[];for(let j=0;j<81;j++){linked[j]=false;}let a=x[i*2+0],b=x[i*2+1];linked[i]=true;chain[len++]=i;while(true){const savLen=len;for(let j=0;j<cx;j++){let gotNewLink=false;if(linked[j])continue;const ci=x[j*2+0],d=x[j*2+1];let dup=false;for(let k=0;k<len;k++){if(ci===x[2*chain[k]]||d===x[2*chain[k]]||ci===x[2*chain[k]+1]||d===x[2*chain[k]+1]){dup=true;break;}}if(dup)continue;if(hasLink(a,ci)&&BOX(b)!==BOX(d)){a=d;gotNewLink=true;}else if(hasLink(a,d)&&BOX(b)!==BOX(ci)){a=ci;gotNewLink=true;}else if(hasLink(b,ci)&&BOX(a)!==BOX(d)){b=d;gotNewLink=true;}else if(hasLink(b,d)&&BOX(a)!==BOX(ci)){b=ci;gotNewLink=true;}if(!gotNewLink)continue;linked[j]=true;chain[len++]=j;if(!isChanged(a,b,n2b(n)))continue;ht1.push(a);ht1.push(b);for(let k=0;k<len;k++){ht4.push(x[2*chain[k]]);ht4.push(x[2*chain[k]+1]);ht4.push(n);}msg=tech.X_Chains;stepDescription="数字"+n+"的X链，坐标"+getCoordStr(a)+"和"+getCoordStr(b)+"形成强链，排除相关候选值。";return true;}if(len===savLen)break;}}}return false;}
-function c2b(c,n){for(let i=0,mask=1;i<9;i++,mask<<=1){if((c&mask)!==0&&--n===0)return mask;}return 0;}
-let xyMask,xyNCell,xyCell=[],xyFlag=[],xyNChain,xyChain=[];
-function findXyChains(link){if(xyNChain>2&&link===xyMask){const a=xyChain[0],b=xyChain[xyNChain-1];if((candidate[b]&xyMask)!==0&&isChanged(a,b,xyMask)){ht1.push(a);ht1.push(b);let mask=xyMask;for(let i=0;i<xyNChain-1;i++){ht4.push(xyChain[i]);ht4.push(xyChain[i+1]);let c=candidate[xyChain[i]],l1=c2b(c,1),l2=c2b(c,2),mask1=l1===mask?l2:l1;if(mask1===0){c=candidate[xyChain[i+1]];l1=c2b(c,1);l2=c2b(c,2);mask1=l1===mask?l2:l1;}ht4.push(b2n(mask1));mask=mask1;}msg=tech.XY_Chains;stepDescription="坐标"+getCoordStr(a)+"到"+getCoordStr(b)+"形成XY链，排除相关候选值。";return true;}}for(let i=0;i<xyNCell;i++){if(xyFlag[i])continue;const cell=xyCell[i];if(!hasLink(xyChain[xyNChain-1],cell))continue;const c=candidate[cell];if((c&link)===0)continue;xyFlag[i]=true;xyChain[xyNChain++]=cell;const link1=c2b(c,1),link2=c2b(c,2);if(link===link1){if(findXyChains(link2))return true;}else{if(findXyChains(link1))return true;}xyFlag[i]=false;xyNChain-=1;}return false;}
-function p_findXyChains(){xyNCell=xyNChain=0;for(let i=0;i<81;i++){if(bc(candidate[i])===2){xyCell[xyNCell]=i;xyFlag[xyNCell]=false;xyNCell+=1;}}for(let i=0;i<xyNCell;i++){xyFlag[i]=true;const cell=xyCell[i];xyChain[xyNChain++]=cell;const c=candidate[cell],link1=c2b(c,1),link2=c2b(c,2);xyMask=link2;if(findXyChains(link1))return true;xyMask=link1;if(findXyChains(link2))return true;xyFlag[i]=false;xyNChain-=1;}return false;}
-function p_findSkyscraper(){const c=[],idx=[],cell=[];for(let n=1;n<=9;n++){for(let i=0;i<9;i++){getCandidateListOfRow(i,c,idx);if(getCandidateCountOfList(c,n,cell)!==2)continue;const r1=i,c1=idx[cell[0]],c2=idx[cell[1]];for(let j=i+1;j<9;j++){getCandidateListOfRow(j,c,idx);if(getCandidateCountOfList(c,n,cell)!==2)continue;const r2=j,c3=idx[cell[0]],c4=idx[cell[1]];if(COL(c1)===COL(c3)&&COL(c2)!==COL(c4)){getCandidateListOfCol(COL(c2),c,idx);getCandidateListOfCol(COL(c4),c,idx);let changed=false,excludedCells=[];for(let k=0;k<9;k++){if((k===r1||k===r2)&&(idx[k]===c2||idx[k]===c4))continue;if(!isSolved(idx[k])&&(c[k]&n2b(n))!==0){changed=true;candidate[idx[k]]&=~n2b(n);excludedCells.push(idx[k]);ht3.push(idx[k]);htMask.push(n2b(n));}}if(changed){ht1.push(c1);ht1.push(c2);ht1.push(c3);ht1.push(c4);msg=tech.Skyscraper;stepDescription="第"+(r1+1)+"行和第"+(r2+1)+"行中，数字"+n+"的候选位置形成摩天楼，第"+(COL(c2)+1)+"列和第"+(COL(c4)+1)+"列其他位置"+excludedCells.map(i=>getCoordStr(i)).join("、")+"排除候选值"+n+"。";return true;}}if(COL(c2)===COL(c4)&&COL(c1)!==COL(c3)){getCandidateListOfCol(COL(c1),c,idx);getCandidateListOfCol(COL(c3),c,idx);let changed=false,excludedCells=[];for(let k=0;k<9;k++){if((k===r1||k===r2)&&(idx[k]===c1||idx[k]===c3))continue;if(!isSolved(idx[k])&&(c[k]&n2b(n))!==0){changed=true;candidate[idx[k]]&=~n2b(n);excludedCells.push(idx[k]);ht3.push(idx[k]);htMask.push(n2b(n));}}if(changed){ht1.push(c1);ht1.push(c2);ht1.push(c3);ht1.push(c4);msg=tech.Skyscraper;stepDescription="第"+(r1+1)+"行和第"+(r2+1)+"行中，数字"+n+"的候选位置形成摩天楼，第"+(COL(c1)+1)+"列和第"+(COL(c3)+1)+"列其他位置"+excludedCells.map(i=>getCoordStr(i)).join("、")+"排除候选值"+n+"。";return true;}}}}}return false;}
-function p_findUniqueRectangle(){for(let box=0;box<9;box++){const c=[],idx=[];getCandidateListOfBox(box,c,idx);for(let i=0;i<9;i++){if(isSolved(idx[i])||bc(c[i])!==2)continue;for(let j=i+1;j<9;j++){if(isSolved(idx[j])||bc(c[j])!==2||c[i]!==c[j])continue;const r1=ROW(idx[i]),c1=COL(idx[i]),r2=ROW(idx[j]),c2=COL(idx[j]);if(r1===r2||c1===c2)continue;const i3=getIdxFromColRow(c1,r2),i4=getIdxFromColRow(c2,r1);if(BOX(i3)!==box||BOX(i4)!==box)continue;if(isSolved(i3)||isSolved(i4))continue;if((candidate[i3]&c[i])===0||(candidate[i4]&c[i])===0)continue;const mask=c[i];if(bc(candidate[i3]&mask)===1&&bc(candidate[i4]&mask)===1){candidate[i3]&=~mask;candidate[i4]&=~mask;ht1.push(idx[i]);ht1.push(idx[j]);ht1.push(i3);ht1.push(i4);ht3.push(i3);ht3.push(i4);htMask.push(mask);htMask.push(mask);msg=tech.UniqueRectangle;stepDescription="坐标"+getCoordStr(idx[i])+"、"+getCoordStr(idx[j])+"、"+getCoordStr(i3)+"和"+getCoordStr(i4)+"形成唯一矩形，排除相关候选值。";return true;}}}}return false;}
-pattern.push(p_findSingle);pattern.push(p_findClaiming);pattern.push(p_findPointing);pattern.push(p_findSubset);pattern.push(p_findXWings);pattern.push(p_findSwordfish);pattern.push(p_findXyWings);pattern.push(p_findWWings);pattern.push(p_findXyzWings);pattern.push(p_findXChains);pattern.push(p_findXyChains);pattern.push(p_findSkyscraper);pattern.push(p_findUniqueRectangle);
-function solve(){sharelink.style.display='none';if(!edit)return;saveInitialState();p2=p.slice(0);let round=1;while(true){let over=true;for(let i=0;i<pattern.length;i++){if(pattern[i]()){updateCandidates();addStep(round++,stepDescription);if(isSolverAll){over=false;}else if(msg===tech.NakedSingle||msg===tech.HiddenSingle){over=true;}else{over=false;}edit=false;break;}}if(over)break;}let _is_solved=true;for(let i=0;i<81;i++){if(!isSolved(i)){_is_solved=false;break;}}if(_is_solved){document.getElementById('status-text').textContent='数独已完全求解！';}else{document.getElementById('status-text').textContent='无法继续求解，可能需要更高级的技巧。';}}
-function resetPuzzle(){edit=true;sharelink.style.display='none';const s=document.getElementById('steps');s.innerHTML='';for(let i=0;i<81;i++){p[i]=0;}originalPuzzle=[];initialPuzzleSaved=false;initCandidates();renderPuzzle('board');document.getElementById('status-text').textContent='编辑模式：可以点击棋盘录入题目。';}
-function applyExample(){const example="530070000600195000098000060800060003400803001700020006060000280000419005000080079";document.getElementById('puzzle-input').value=example;applyPuzzle();}
-function applyPuzzle(){const text=document.getElementById('puzzle-input').value,cleaned=text.replace(/[^0-9.]/g,'');for(let i=0;i<81&&i<cleaned.length;i++){const ch=cleaned[i];p[i]=(ch==='.'||ch==='0')?0:parseInt(ch);}originalPuzzle=p.slice(0);initialPuzzleSaved=false;initCandidates();renderPuzzle('board');document.getElementById('status-text').textContent='题目已应用，可以开始求解。';}
-function exportPuzzleText(){let text='';for(let i=0;i<81;i++){text+=p[i]===0?'.':p[i];}document.getElementById('puzzle-input').value=text;}
-function generateShareLink(){if(edit){p2=p.slice(0);}let link=location.href.split("?")[0].split("#")[0]+'?p=';for(let i=0;i<81;i++){link+=p2[i];if(i<80)link+=',';}if(!edit){link+='&s=1';}sharelink.style.display='block';sharelink.value=link;}
-function toggleEditMode(){edit=!edit;const digitPanel=document.getElementById('digit-panel');if(edit){digitPanel.hidden=false;document.getElementById('status-text').textContent='编辑模式：可以点击棋盘录入题目。';}else{digitPanel.hidden=true;document.getElementById('status-text').textContent='演示模式：已禁用编辑功能。';}}
-function printPuzzle(){window.print();}
-function init(){const initialPuzzle=<?php echo $puzzleJson; ?>;for(let i=0;i<81;i++){p[i]=initialPuzzle[i]||0;}originalPuzzle=p.slice(0);initCandidates();const board=document.getElementById('board');board.setAttribute('width',PUZZLE_W);board.setAttribute('height',PUZZLE_H);renderPuzzle('board');board.onmousedown=function(e){sharelink.style.display='none';if(!edit||e.button===2)return;const col=Math.floor(e.offsetX/(1+CELL_W)),row=Math.floor(e.offsetY/(1+CELL_H)),i=getIdxFromColRow(col,row);if(p[i]!==0){p[i]=0;originalPuzzle[i]=0;initCandidates();renderPuzzle('board');return false;}const chcol=Math.floor((e.offsetX-col*(1+CELL_W))/CHAR_W),chrow=Math.floor((e.offsetY-row*(1+CELL_H))/CHAR_H),j=chcol+3*chrow;if((candidate[i]&n2b(1+j))!==0){p[i]=1+j;originalPuzzle[i]=1+j;initCandidates();renderPuzzle('board');}};document.getElementById('btn-reset').onclick=resetPuzzle;document.getElementById('btn-example').onclick=applyExample;document.getElementById('btn-edit').onclick=toggleEditMode;document.getElementById('btn-step').onclick=function(){saveInitialState();let found=false;for(let i=0;i<pattern.length;i++){if(pattern[i]()){updateCandidates();const round=document.getElementById('steps').children.length;addStep(round,stepDescription);edit=false;document.getElementById('digit-panel').hidden=true;found=true;break;}}if(!found){document.getElementById('status-text').textContent='无法找到下一步解法。';}};document.getElementById('btn-solve').onclick=solve;document.getElementById('btn-step-clear').onclick=function(){document.getElementById('steps').innerHTML='';initialPuzzleSaved=false;};document.getElementById('btn-print').onclick=printPuzzle;document.getElementById('btn-share').onclick=generateShareLink;document.getElementById('btn-apply').onclick=applyPuzzle;document.getElementById('btn-export').onclick=exportPuzzleText;sharelink=document.getElementById('share-link');sharelink.style.display='none';sharelink.style.width='400px';sharelink.style.height='2em';sharelink.style.border='1px solid #666';const digitPanel=document.getElementById('digit-panel');digitPanel.querySelectorAll('button').forEach(btn=>{btn.onclick=function(){const digit=parseInt(btn.getAttribute('data-digit'));}});}
-if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init);}else{init();}
+function renderPuzzle(name,puzzle,candidates,highlightCells,excludeCells){
+const c=document.getElementById(name);
+if(!c)return;
+const ctx=c.getContext('2d');
+ctx.lineWidth=1;
+ctx.textAlign="center";
+ctx.textBaseline="middle";
+ctx.fillStyle='#FFFFFF';
+ctx.fillRect(0,0,PUZZLE_W,PUZZLE_H);
+ctx.fillStyle='Black';
+for(let i=0;i<81;i++){
+const x=COL(i)*(1+CELL_W),y=ROW(i)*(1+CELL_H);
+if(highlightCells&&highlightCells.indexOf(i)!==-1){
+ctx.fillStyle='#B6FF00';
+ctx.fillRect(x,y,CELL_W+1,CELL_H+1);
+ctx.fillStyle='Black';
+}else if(excludeCells&&excludeCells.indexOf(i)!==-1){
+ctx.fillStyle='#ffebee';
+ctx.fillRect(x,y,CELL_W+1,CELL_H+1);
+ctx.fillStyle='Black';
+}
+const cx=x+Math.floor(CHAR_W/2),cy=y+Math.floor(CHAR_H/2)+1;
+if(puzzle[i]!==0){
+ctx.font='30px Arial';
+if(isOriginal(i)){
+ctx.fillStyle='#0066cc';
+}else{
+ctx.fillStyle='#cc6600';
+}
+ctx.fillText(puzzle[i],cx+CHAR_W,cy+CHAR_H);
+ctx.fillStyle='Black';
+}else{
+ctx.font=CHAR_H+'px sans-serif';
+ctx.fillStyle='#999999';
+for(let j=0;j<9;j++){
+if(candidates[i]&n2b(1+j)){
+ctx.fillText(1+j,cx+(j%3)*CHAR_W,cy+Math.floor(j/3)*CHAR_H);
+}
+}
+}
+}
+for(let i=1;i<9;i++){
+if(i%3===0){
+ctx.strokeStyle='Black';
+}else{
+ctx.strokeStyle='LightGray';
+}
+const x=i*(1+CELL_W),y=i*(1+CELL_H);
+ctx.beginPath();
+ctx.moveTo(x,0);
+ctx.lineTo(x,PUZZLE_H);
+ctx.moveTo(0,y);
+ctx.lineTo(PUZZLE_W,y);
+ctx.stroke();
+}
+}
+function init(){
+const board=document.getElementById('board');
+board.setAttribute('width',PUZZLE_W);
+board.setAttribute('height',PUZZLE_H);
+if(steps.length>0){
+renderPuzzle('board',steps[0].puzzle,steps[0].candidates);
+}
+const stepsContainer=document.getElementById('steps');
+steps.forEach(function(step){
+const card=document.createElement('div');
+card.className='step-card';
+const h2=document.createElement('h2');
+h2.textContent='步骤 '+step.step+(step.technique&&step.technique!=='Initial'?': '+tech[step.technique]:'');
+card.appendChild(h2);
+if(step.description){
+const descDiv=document.createElement('div');
+descDiv.className='step-description';
+descDiv.textContent=step.description;
+card.appendChild(descDiv);
+}
+const canvasWrapper=document.createElement('div');
+canvasWrapper.className='step-canvas-wrapper';
+const c=document.createElement('canvas');
+c.setAttribute('id','c'+step.step);
+c.setAttribute('width',PUZZLE_W);
+c.setAttribute('height',PUZZLE_H);
+canvasWrapper.appendChild(c);
+card.appendChild(canvasWrapper);
+stepsContainer.appendChild(card);
+const highlightCells=[];
+const excludeCells=[];
+if(step.cell!==undefined)highlightCells.push(step.cell);
+if(step.cells)highlightCells.push.apply(highlightCells,step.cells);
+if(step.excluded)excludeCells.push.apply(excludeCells,step.excluded);
+renderPuzzle('c'+step.step,step.puzzle,step.candidates,highlightCells,excludeCells);
+});
+document.getElementById('btn-print').onclick=function(){window.print();};
+document.getElementById('btn-example').onclick=function(){
+const example="530070000600195000098000060800060003400803001700020006060000280000419005000080079";
+document.getElementById('puzzle-input').value=example;
+window.location.href='?p='+example;
+};
+document.getElementById('btn-apply').onclick=function(){
+const text=document.getElementById('puzzle-input').value;
+window.location.href='?p='+encodeURIComponent(text);
+};
+}
+if(document.readyState==='loading'){
+document.addEventListener('DOMContentLoaded',init);
+}else{
+init();
+}
 })();
 </script>
 </body>
